@@ -2,12 +2,15 @@ from __future__ import annotations
 import os
 import re
 import json
+import logging
 import subprocess
-from typing import Optional, Dict, Any, Tuple, Dict as _Dict, Any as _Any
+from typing import Optional, Dict, Any, Tuple, List, Dict as _Dict, Any as _Any
 from dataclasses import dataclass
 from dotenv import load_dotenv
+import requests
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 def _normalize_gemini_env() -> None:
     """
     Make Gemini work regardless of whether the user set GEMINI_API_KEY or GOOGLE_API_KEY.
@@ -234,6 +237,197 @@ class IntelligentLLMRouter:
             ), 
         ]
 
+        self.openrouter_models = self._load_openrouter_models() or self._default_openrouter_models()
+
+
+    def _load_openrouter_models(self) -> List[ModelConfig]:
+        api_key = (
+            os.getenv("OPENROUTER_API_KEY")
+            or os.getenv("OPENROUTE_API_KEY")
+        )
+        base_url = (os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1").rstrip("/")
+        headers = {
+            "User-Agent": "LangCode-OpenRouter-ModelLoader/1.0",
+        }
+        referer = os.getenv("OPENROUTER_SITE_URL") or os.getenv("YOUR_SITE_URL")
+        title = os.getenv("OPENROUTER_SITE_NAME") or os.getenv("YOUR_SITE_NAME")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        if referer:
+            headers["HTTP-Referer"] = referer
+        if title:
+            headers["X-Title"] = title
+
+        url = f"{base_url}/models"
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+        except Exception as exc:
+            logger.debug("OpenRouter model fetch failed: %s", exc)
+            return []
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            logger.debug("OpenRouter model response is not JSON: %s", exc)
+            return []
+
+        items = payload.get("data")
+        if not isinstance(items, list):
+            return []
+
+        models: List[ModelConfig] = []
+        for item in items:
+            model_id = item.get("id")
+            if not isinstance(model_id, str) or not model_id.strip():
+                continue
+            model_id = model_id.strip()
+            name = (item.get("name") or model_id).strip()
+
+            pricing = item.get("pricing") or {}
+            prompt_price = self._price_to_million(pricing.get("prompt"))
+            completion_price = self._price_to_million(pricing.get("completion"))
+
+            context = self._safe_context(
+                item.get("context_length"),
+                (item.get("top_provider") or {}).get("context_length"),
+            )
+
+            description = (item.get("description") or "").strip()
+            if description:
+                capabilities = description.splitlines()[0].strip()
+            else:
+                modality = (item.get("architecture") or {}).get("modality") or "text"
+                capabilities = f"OpenRouter: {modality}"
+
+            latency = self._guess_latency(prompt_price, context)
+            reasoning = self._guess_reasoning(prompt_price, completion_price)
+
+            models.append(
+                ModelConfig(
+                    name=name,
+                    input_cost_per_million=prompt_price,
+                    output_cost_per_million=completion_price,
+                    capabilities=capabilities,
+                    latency_tier=latency,
+                    reasoning_strength=reasoning,
+                    context_window=context,
+                    provider="openrouter",
+                    model_id=model_id,
+                    langchain_model_name=model_id,
+                )
+            )
+        return models
+
+    @staticmethod
+    def _price_to_million(value: Any) -> float:
+        try:
+            if value in (None, ""):
+                return 0.0
+            return float(value) * 1_000_000
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _safe_context(*candidates: Any) -> int:
+        for candidate in candidates:
+            if isinstance(candidate, (int, float)) and candidate > 0:
+                return int(candidate)
+            if isinstance(candidate, str):
+                try:
+                    val = float(candidate)
+                    if val > 0:
+                        return int(val)
+                except ValueError:
+                    continue
+        return 128_000
+
+    @staticmethod
+    def _guess_latency(prompt_price: float, context: int) -> int:
+        if prompt_price >= 5 or context >= 400_000:
+            return 3
+        if prompt_price >= 1 or context >= 160_000:
+            return 2
+        return 1
+
+    @staticmethod
+    def _guess_reasoning(prompt_price: float, completion_price: float) -> int:
+        max_price = max(prompt_price, completion_price)
+        if max_price >= 5:
+            return 9
+        if max_price >= 3:
+            return 8
+        if max_price >= 1:
+            return 7
+        if max_price >= 0.5:
+            return 6
+        return 5
+
+    @staticmethod
+    def _default_openrouter_models() -> List[ModelConfig]:
+        return [
+            ModelConfig(
+                name="GPT-4o",
+                input_cost_per_million=5.00,
+                output_cost_per_million=15.00,
+                capabilities="OpenRouter: High quality multimodal/chat via GPT-4o",
+                latency_tier=3,
+                reasoning_strength=9,
+                context_window=200_000,
+                provider="openrouter",
+                model_id="openai/gpt-4o",
+                langchain_model_name="openai/gpt-4o",
+            ),
+            ModelConfig(
+                name="Claude 3.5 Sonnet",
+                input_cost_per_million=3.00,
+                output_cost_per_million=15.00,
+                capabilities="OpenRouter: Optimal balance of intelligence, cost, and speed",
+                latency_tier=2,
+                reasoning_strength=8,
+                context_window=200_000,
+                provider="openrouter",
+                model_id="anthropic/claude-3.5-sonnet",
+                langchain_model_name="anthropic/claude-3.5-sonnet",
+            ),
+            ModelConfig(
+                name="Gemini 2.0 Flash Lite",
+                input_cost_per_million=0.10,
+                output_cost_per_million=0.40,
+                capabilities="OpenRouter: Fast multimodal model via Gemini 2.0",
+                latency_tier=1,
+                reasoning_strength=6,
+                context_window=1_000_000,
+                provider="openrouter",
+                model_id="google/gemini-2.0-flash-lite",
+                langchain_model_name="google/gemini-2.0-flash-lite",
+            ),
+            ModelConfig(
+                name="Llama 3.3 70B",
+                input_cost_per_million=0.60,
+                output_cost_per_million=0.60,
+                capabilities="OpenRouter: Fast open-source model via Llama 3.3",
+                latency_tier=2,
+                reasoning_strength=7,
+                context_window=8_000,
+                provider="openrouter",
+                model_id="meta-llama/llama-3.3-70b-instruct",
+                langchain_model_name="meta-llama/llama-3.3-70b-instruct",
+            ),
+            ModelConfig(
+                name="Mistral Large 2",
+                input_cost_per_million=2.00,
+                output_cost_per_million=6.00,
+                capabilities="OpenRouter: Powerful open-source model via Mistral",
+                latency_tier=2,
+                reasoning_strength=7,
+                context_window=32_000,
+                provider="openrouter",
+                model_id="mistralai/mistral-large-2407",
+                langchain_model_name="mistralai/mistral-large-2407",
+            ),
+        ]
+
 
     def extract_features(self, query: str) -> Dict[str, Any]:
         if not query:
@@ -338,6 +532,8 @@ class IntelligentLLMRouter:
             available = self.anthropic_models
         elif provider == "openai":
             available = self.openai_models
+        elif provider == "openrouter":
+            available = self.openrouter_models
         elif provider == "ollama":
             available = self.ollama_models
         else:
@@ -451,6 +647,67 @@ def _cached_chat_model(provider: str, model_name: str, temperature: float = 0.2)
     elif provider == "openai":
         from langchain_openai import ChatOpenAI
         m = ChatOpenAI(model=model_name, temperature=temperature)
+    elif provider == "openrouter":
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "Missing OPENROUTER_API_KEY. "
+                "Set this in your .env (same folder you chose as Project). "
+                "Get your API key at https://openrouter.ai/"
+            )
+
+        base_url = (os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1").rstrip("/")
+        referer = (
+            os.getenv("OPENROUTER_SITE_URL")
+            or os.getenv("YOUR_SITE_URL")
+        )
+        title = (
+            os.getenv("OPENROUTER_SITE_NAME")
+            or os.getenv("YOUR_SITE_NAME")
+        )
+        headers: Dict[str, str] = {}
+        if referer:
+            headers["HTTP-Referer"] = referer
+        if title:
+            headers["X-Title"] = title
+
+        try:
+            from langchain_openrouter import ChatOpenRouter  # type: ignore
+        except Exception as exc:  # pragma: no cover - fallback when optional dep is incompatible
+            logger.debug("ChatOpenRouter import failed: %s", exc)
+            ChatOpenRouter = None  # type: ignore
+        if ChatOpenRouter:
+            extra_args: Dict[str, Any] = {}
+            if base_url:
+                extra_args["base_url"] = base_url
+            if headers:
+                extra_args["default_headers"] = headers
+            try:
+                m = ChatOpenRouter(
+                    model=model_name,
+                    temperature=temperature,
+                    openrouter_api_key=api_key,
+                    **extra_args,
+                )
+            except TypeError:
+                # Older langchain-openrouter versions might not accept base_url/default_headers.
+                extra_args.pop("base_url", None)
+                extra_args.pop("default_headers", None)
+                m = ChatOpenRouter(
+                    model=model_name,
+                    temperature=temperature,
+                    openrouter_api_key=api_key,
+                    **extra_args,
+                )
+        else:
+            from langchain_openai import ChatOpenAI
+            m = ChatOpenAI(
+                model=model_name,
+                temperature=temperature,
+                api_key=api_key,
+                base_url=base_url,
+                default_headers=headers or None,
+            )
     elif provider == "ollama": 
         from langchain_ollama import ChatOllama 
         base_url = os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_HOST") 
@@ -471,23 +728,26 @@ def resolve_provider(cli_llm: str | None) -> str:
         if p in {"gemini", "google"}:
             return "gemini"
         if p in {"openai", "gpt"}: 
-            return "openai" 
+            return "openai"
+        if p in {"openrouter"}: 
+            return "openrouter"
         if p in {"ollama"}: 
             return "ollama"
         return p
 
     env = os.getenv("LLM_PROVIDER", "gemini").lower()
-    if env not in {"gemini", "anthropic", "openai", "ollama"}:
+    if env not in {"gemini", "anthropic", "openai", "openrouter", "ollama"}:
         env = "gemini"
     return env
 
 def get_model(provider: str, query: Optional[str] = None, priority: str = "balanced"):
     """
     When no query is given (no router context), return a solid default:
-      - anthropic => 'claude-3-7-sonnet-20250219'
-      - gemini    => 'gemini-2.0-flash'
-      - openai    => 'gpt-4o-mini'
-      - ollama    => detected default (prefers llama3.1)
+      - anthropic    => 'claude-3-7-sonnet-20250219'
+      - gemini       => 'gemini-2.0-flash'
+      - openai       => 'gpt-4o-mini'
+      - openrouter   => 'google/gemini-2.0-flash-lite'
+      - ollama       => detected default (prefers llama3.1)
     With a query, use the speed-first router with reasoning override and cache the model object.
     """
     if not query:
@@ -496,7 +756,9 @@ def get_model(provider: str, query: Optional[str] = None, priority: str = "balan
         elif provider == "gemini":
             return _cached_chat_model("gemini", "gemini-2.0-flash", 0.2)
         elif provider == "openai": 
-            return _cached_chat_model("openai", "gpt-4o-mini", 0.2) 
+            return _cached_chat_model("openai", "gpt-4o-mini", 0.2)
+        elif provider == "openrouter": 
+            return _cached_chat_model("openrouter", "google/gemini-2.0-flash-lite", 0.2)
         elif provider == "ollama": 
             return _cached_chat_model("ollama", _chosen_ollama_model(), 0.2)
         else:
@@ -508,7 +770,9 @@ def get_model(provider: str, query: Optional[str] = None, priority: str = "balan
     elif provider == "gemini":
         return _cached_chat_model("gemini", optimal.langchain_model_name, 0.2)
     elif provider == "openai": 
-        return _cached_chat_model("openai", optimal.langchain_model_name, 0.2) 
+        return _cached_chat_model("openai", optimal.langchain_model_name, 0.2)
+    elif provider == "openrouter": 
+        return _cached_chat_model("openrouter", optimal.langchain_model_name, 0.2)
     elif provider == "ollama": 
         name = os.getenv("LANGCODE_OLLAMA_MODEL") or _chosen_ollama_model()
         return _cached_chat_model("ollama", name, 0.2)
@@ -540,7 +804,15 @@ def get_model_info(provider: str, query: Optional[str] = None, priority: str = "
                 'provider': provider, 
                 'complexity': 'default', 
                 'note': 'Using default model - no query provided for optimization' 
-            } 
+            }
+        elif provider == "openrouter": 
+            return { 
+                'model_name': 'Gemini 2.0 Flash Lite (Default)', 
+                'langchain_model_name': 'google/gemini-2.0-flash-lite', 
+                'provider': provider, 
+                'complexity': 'default', 
+                'note': 'Using default model - no query provided for optimization. Requires OPENROUTER_API_KEY.' 
+            }
         elif provider == "ollama": 
             md = os.getenv("LANGCODE_OLLAMA_MODEL") or _pick_default_ollama_model()
             return { 

@@ -24,7 +24,9 @@ dependencies = [
     "langchain-tavily>=0.1.0",
     "genai-processors>=1.1.0",
     "langchain-openai>=0.3.0,<0.4.0",
+    "langchain-openrouter>=0.0.1",
     "langchain-ollama>=0.3.0,<0.4.0",
+    "requests>=2.32.3",
 ]
 
 [project.scripts]

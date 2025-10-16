@@ -152,6 +152,7 @@ def _env_template_text(scope: str = "project") -> str:
 # OPENAI_API_KEY=sk-...
 # ANTHROPIC_API_KEY=...
 # GEMINI_API_KEY=...
+# OPENROUTER_API_KEY=...
 # GROQ_API_KEY=...
 # LANGCHAIN_API_KEY=...
 # TAVILY_API_KEY=... (For web search)
@@ -1411,7 +1412,7 @@ def _info_panel_for(field: str) -> Panel:
         "Priority": "[bold]Routing priority[/bold]: [cyan]balanced[/cyan] | cost | speed | quality – influences model choice.",
         "Autopilot": "[bold]Autopilot[/bold] (deep chat only): Agent plans and executes end-to-end [italic]without asking questions[/italic]. It still uses tools safely, but won't seek confirmation.",
         "Apply": "[bold]Apply[/bold] (feature/fix only): If ON, the agent is allowed to [bold]write files[/bold] and [bold]run commands[/bold]. If OFF, it proposes diffs and commands but does not execute them.",
-        "LLM": "[bold]LLM provider[/bold]: Explicitly force [cyan]anthropic[/cyan], [cyan]gemini[/cyan], [cyan]openai[/cyan], or [cyan]ollama[/cyan]. Leave blank to follow router/defaults.",
+        "LLM": "[bold]LLM provider[/bold]: Explicitly force [cyan]anthropic[/cyan], [cyan]gemini[/cyan], [cyan]openai[/cyan], [cyan]openrouter[/cyan], or [cyan]ollama[/cyan]. Leave blank to follow router/defaults.",
         "Project": "[bold]Project directory[/bold]: Where the agent operates.",
         "Custom Instructions": "[bold].langcode/langcode.md[/bold]: Project-specific instructions appended to the base prompt. Press Enter to open Vim (or $VISUAL/$EDITOR). Exit with :wq.",
         "MCP Config": "[bold].langcode/mcp.json[/bold]: Configure MCP servers used by the agent/tools. Press Enter to open Vim (or $VISUAL/$EDITOR). Exit with :wq. File is created if missing.",
@@ -1474,6 +1475,14 @@ def _provider_model_choices(provider: Optional[str]) -> list[str]:
             "gpt-4o-mini", 
             "gpt-4o", 
         ] 
+    if provider == "openrouter": 
+        return [ 
+            "openai/gpt-4o", 
+            "anthropic/claude-3.5-sonnet", 
+            "google/gemini-2.0-flash-lite", 
+            "meta-llama/llama-3.3-70b-instruct", 
+            "mistralai/mistral-large-2407", 
+        ] 
     if provider == "ollama": 
         return _list_ollama_models() 
     return []
@@ -1524,7 +1533,7 @@ def _help_content() -> Panel:
     cmds = Panel(cmd_tbl, title="Commands", border_style="cyan", box=box.ROUNDED, padding=(1, 1), expand=True)
 
     global_opts = opts_card("Global options", [
-        ("--llm",              "Force provider (anthropic | gemini | openai | ollama)."),
+        ("--llm",              "Force provider (anthropic | gemini | openai | openrouter | ollama)."),
         ("--router",           "Smart model routing per prompt."),
         ("--priority",         "balanced | cost | speed | quality (default: balanced)."),
         ("--verbose",          "Show model-selection panel when routing."),
@@ -1732,7 +1741,7 @@ def _launcher_loop(initial_state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             if state["command"] in ("feature", "fix"):
                 state["apply"] = not state["apply"]
         elif field == "LLM":
-            opts = [None, "anthropic", "gemini", "openai", "ollama"]
+            opts = [None, "anthropic", "gemini", "openai", "openrouter", "ollama"]
             cur = state["llm"]
             i = (opts.index(cur) + direction) % len(opts)
             state["llm"] = opts[i]
@@ -2071,6 +2080,7 @@ def doctor(
         "ANTHROPIC_API_KEY": "Anthropic",
         "GOOGLE_API_KEY": "Gemini",
         "GEMINI_API_KEY": "Gemini (alt)",
+        "OPENROUTER_API_KEY": "OpenRouter",
         "GROQ_API_KEY": "Groq",
         "TOGETHER_API_KEY": "Together",
         "FIREWORKS_API_KEY": "Fireworks",

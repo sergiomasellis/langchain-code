@@ -16,6 +16,7 @@ This documentation provides a comprehensive overview of the LangCode architectur
 - **[Introduction](README.md)**: Overview of the LangCode project and its purpose.
 - **[Command-Line Interface (CLI)](cli.md)**: Detailed guide to using the LangCode CLI, including commands, options, and usage examples.
 - **[Configuration](config.md)**: Explanation of how to configure LangCode, including setting the language model provider and other settings.
+- **[OpenRouter Integration](openrouter.md)**: Guide to using OpenRouter, a unified API gateway for accessing 100+ language models from multiple providers.
 - **[Agent](agent/README.md)**: Information about the LangCode agent architecture and its components.
   - **[Deep Agent](agent/deep.md)**: In-depth documentation of the Deep Agent, its planning and tasking capabilities, and its subagents.
   - **[ReAct Agent](agent/react.md)**: Comprehensive guide to the ReAct Agent, its reasoning and acting framework, and its tools.
@@ -30,6 +31,7 @@ This documentation provides a comprehensive overview of the LangCode architectur
 - **[Introduction](README.md)**
 - **[Command-Line Interface (CLI)](cli.md)**
 - **[Configuration](config.md)**
+- **[OpenRouter Integration](openrouter.md)**
 - **[Agent](agent/README.md)**
   - **[Deep Agent](agent/deep.md)**
   - **[ReAct Agent](agent/react.md)**
